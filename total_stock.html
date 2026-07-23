@@ -1,111 +1,30 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>资产持仓监控面板</title>
 <style>
-:root {
-  --bg-main: #141a23;
-  --bg-card: #1d2530;
-  --bg-table-header: #242e3b;
-  --border-color: #2f3a48;
-  --text-primary: #e8edf2;
-  --text-secondary: #a0aebf;
-  --text-hint: #78889c;
-  --color-profit: #4cd264;
-  --color-loss: #ff5c5c;
-  --color-warn: #ffbc42;
-  --shadow-sm: 0 2px 8px rgba(0,0,0,0.25);
-}
-*{box-sizing:border-box;font-family:system-ui, -apple-system, sans-serif;}
-body{
-  max-width:1200px;
-  margin:32px auto;
-  padding:0 20px;
-  background:var(--bg-main);
-  color:var(--text-primary);
-  line-height:1.55;
-}
-h2{
-  font-size:24px;
-  font-weight:600;
-  margin-bottom:12px;
-  color:#fff;
-}
-h3{
-  font-size:18px;
-  margin:0 0 14px;
-  font-weight:500;
-}
-.info-bar{
-  display:flex;
-  flex-wrap:wrap;
-  gap:16px 24px;
-  font-size:14px;
-  color:var(--text-secondary);
-  margin-bottom:18px;
-  align-items:center;
-}
-.warn-tip{
-  color:var(--color-warn);
-}
-table{
-  width:100%;
-  border-collapse:separate;
-  border-spacing:0;
-  border-radius:10px;
-  overflow:hidden;
-  background:var(--bg-card);
-  box-shadow:var(--shadow-sm);
-  margin:24px 0;
-}
-th,td{
-  padding:14px 12px;
-  text-align:left;
-  border-bottom:1px solid var(--border-color);
-  font-size:14px;
-}
-th{
-  background:var(--bg-table-header);
-  color:var(--text-secondary);
-  font-weight:500;
-}
-tbody tr:last-child td{
-  border-bottom:none;
-}
-tbody tr:hover{
-  background:rgba(255,255,255,0.04);
-}
-.positive{color:var(--color-profit);}
-.negative{color:var(--color-loss);}
-.warn{color:var(--color-warn);}
-.tag-ext{font-size:12px;margin-left:6px;color:var(--text-hint);}
-.rmb-tag{font-size:13px;color:var(--text-hint);margin-left:8px;}
-.total-box{
-  background:var(--bg-card);
-  padding:22px;
-  border-radius:10px;
-  box-shadow:var(--shadow-sm);
-  margin-top:10px;
-}
-.total-box p{
-  margin:10px 0;
-  font-size:15px;
-}
-.total-box span{
-  font-weight:500;
-  margin-left:6px;
-}
+*{box-sizing:border-box;font-family:system-ui, sans-serif;}
+body{max-width:1100px;margin:30px auto;padding:0 16px;background:#0f1419;color:#e6e6e6;}
+table{width:100%;border-collapse:collapse;margin:20px 0;}
+th,td{padding:12px 10px;text-align:left;border-bottom:1px solid #2c3238;}
+th{color:#aaa;font-weight:normal;}
+.positive{color:#52c41a;}
+.negative{color:#ff4d4f;}
+.warn{color:#faad14;}
+.tag-ext{font-size:12px;margin-left:6px;color:#999;}
+.total-box{background:#1a2028;padding:18px;border-radius:8px;margin:20px 0;}
+.info{color:#999;font-size:14px}
 </style>
 </head>
 <body>
 <h2>持仓资产监控面板</h2>
-<div class="info-bar">
-  <div>下次自动刷新：<span id="countdown">5:00</span></div>
-  <div>最近更新：<span id="lastUpdate">-</span></div>
-  <div class="warn-tip" id="warnTip"></div>
+<div class="info">
+下次自动刷新：<span id="countdown">5:00</span> | 最近更新：<span id="lastUpdate">-</span>
+<div class="warn" id="warnTip"></div>
 </div>
+
 <table>
 <thead>
 <tr>
@@ -122,13 +41,14 @@ tbody tr:hover{
 </thead>
 <tbody id="tableBody"></tbody>
 </table>
+
 <div class="total-box">
 <h3>汇总统计</h3>
 <p>总投入成本：<span id="totalCost"></span> USD</p>
-<p>当前总市值：<span id="totalValue"></span> USD <span class="rmb-tag" id="totalValueCny"></span></p>
+<p>当前总市值：<span id="totalValue"></span> USD</p>
 <p>总盈亏：<span id="totalPnl"></span> USD（<span id="totalPnlPct"></span>）</p>
-<p style="margin-top:16px;font-size:13px;color:var(--text-hint);">汇率参考：1 USD = <span id="rateUsdCny">--</span> CNY，换算系数 ×0.995</p>
 </div>
+
 <script>
 // ========== 持仓数据 ==========
 const holdings = [
@@ -138,6 +58,7 @@ const holdings = [
   {market:"虚拟货币",symbol:"AAVE",qty:37.46,costPrice:93.43,costTotal:3500,coingeckoId:"aave",yahooTicker:""},
   {market:"虚拟货币",symbol:"UNI",qty:1114.53,costPrice:3.5262,costTotal:3930,coingeckoId:"uniswap",yahooTicker:""}
 ];
+
 const REFRESH_MS = 5 * 60 * 1000;
 let countdownSec = REFRESH_MS / 1000;
 const warnTip = document.getElementById("warnTip");
@@ -146,10 +67,8 @@ const proxyList = [
   "https://corsproxy.io/?",
   "https://cors-anywhere.azm.workers.dev/"
 ];
-// 本地缓存：行情 + USD/CNY汇率
+// 从本地存储读取历史行情，刷新页面不丢失
 let priceCache = JSON.parse(localStorage.getItem("assetPriceCache")) || {};
-let usdCnyRate = Number(localStorage.getItem("usdCnyRate")) || null;
-const RATE_FACTOR = 0.995; // 汇率折算系数
 
 function fetchWithTimeout(url, timeout = 8000) {
   return Promise.race([
@@ -158,23 +77,14 @@ function fetchWithTimeout(url, timeout = 8000) {
   ]);
 }
 
-// 获取USD/CNY实时汇率（coingecko简单接口）
-async function fetchUsdCnyRate() {
-  const url = `https://api.coingecko.com/api/v3/simple/price?ids=usd&vs_currencies=cny`;
-  const res = await fetch(url);
-  const json = await res.json();
-  return json.usd.cny;
-}
-
-function render(prices, rate) {
+function render(prices){
   let html = "";
   let sumCost = 0, sumValue = 0;
-  const rateShow = rate ?? usdCnyRate;
-
   holdings.forEach(item=>{
     sumCost += item.costTotal;
     const raw = prices[item.symbol];
     let price, tag = "";
+
     if(typeof raw === "number"){
       price = raw;
     }else if(raw && raw.price){
@@ -194,15 +104,12 @@ function render(prices, rate) {
       `;
       return;
     }
+
     const marketValue = item.qty * price;
     const pnl = marketValue - item.costTotal;
     const pnlPct = (pnl / item.costTotal *100).toFixed(2);
     const cls = pnl >=0 ? "positive" : "negative";
-    // 换算人民币市值
-    let marketValueCny = "--";
-    if(rateShow){
-      marketValueCny = (marketValue * rateShow * RATE_FACTOR).toFixed(2);
-    }
+
     html += `
     <tr>
       <td>${item.market}</td>
@@ -211,7 +118,7 @@ function render(prices, rate) {
       <td>${item.costPrice.toFixed(2)}</td>
       <td>${item.costTotal.toFixed(2)}</td>
       <td>${price.toFixed(2)} ${tag?`<span class="tag-ext">${tag}</span>`:""}</td>
-      <td>${marketValue.toFixed(2)}<span class="rmb-tag">(¥${marketValueCny})</span></td>
+      <td>${marketValue.toFixed(2)}</td>
       <td class="${cls}">${pnl.toFixed(2)}</td>
       <td class="${cls}">${pnlPct}%</td>
     </tr>
@@ -220,25 +127,18 @@ function render(prices, rate) {
   })
   document.getElementById("tableBody").innerHTML = html;
 
-  // 汇总计算
   const totalPnl = sumValue - sumCost;
   const totalPnlPct = (totalPnl / sumCost *100).toFixed(2);
   const clsTotal = totalPnl >=0 ? "positive" : "negative";
-  let totalValueCny = "--";
-  if(rateShow){
-    totalValueCny = (sumValue * rateShow * RATE_FACTOR).toFixed(2);
-  }
 
   document.getElementById("totalCost").innerText = sumCost.toFixed(2);
   document.getElementById("totalValue").innerText = sumValue.toFixed(2);
-  document.getElementById("totalValueCny").innerText = `(¥${totalValueCny})`;
   document.getElementById("totalPnl").innerHTML = `<span class="${clsTotal}">${totalPnl.toFixed(2)}</span>`;
   document.getElementById("totalPnlPct").innerHTML = `<span class="${clsTotal}">${totalPnlPct}%</span>`;
   document.getElementById("lastUpdate").innerText = new Date().toLocaleString();
-  document.getElementById("rateUsdCny").innerText = rateShow ? rateShow.toFixed(4) : "获取失败";
 }
 
-// ========== 虚拟货币行情 ==========
+// ========== 虚拟货币【完全不变】 ==========
 async function fetchCryptoPrices(){
   const ids = holdings.filter(h=>h.coingeckoId).map(h=>h.coingeckoId).join(",");
   const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
@@ -252,7 +152,7 @@ async function fetchCryptoPrices(){
   return map;
 }
 
-// ========== Yahoo CRCL 股票行情 ==========
+// ========== Yahoo CRCL 盘前/盘后逻辑 + 多代理重试 ==========
 async function fetchStockPrice(){
   const ticker = "CRCL";
   const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
@@ -266,6 +166,7 @@ async function fetchStockPrice(){
       let tag = "";
       const nowUtcSec = Date.now() / 1000;
       const regCloseTime = meta.regularMarketTime;
+
       if (nowUtcSec < regCloseTime && meta.preMarketPrice) {
         usePrice = meta.preMarketPrice;
         tag = "[盘前]";
@@ -284,18 +185,7 @@ async function fetchStockPrice(){
 async function loadQuotes(){
   warnTip.innerText = "";
   const newPriceMap = {...priceCache};
-  let newRate = usdCnyRate;
 
-  // 1. 获取汇率
-  try{
-    newRate = await fetchUsdCnyRate();
-    usdCnyRate = newRate;
-    localStorage.setItem("usdCnyRate", newRate);
-  }catch(e){
-    warnTip.innerText += "⚠️ USD/CNY汇率获取失败，沿用缓存汇率 ";
-  }
-
-  // 2. 加密货币行情
   try{
     const cryptoMap = await fetchCryptoPrices();
     Object.assign(newPriceMap, cryptoMap);
@@ -303,7 +193,6 @@ async function loadQuotes(){
     warnTip.innerText += "⚠️ 加密货币行情获取失败 ";
   }
 
-  // 3. 美股CRCL行情
   try{
     const stockMap = await fetchStockPrice();
     if(stockMap){
@@ -315,10 +204,10 @@ async function loadQuotes(){
     warnTip.innerText += "⚠️ CRCL请求异常，沿用缓存价格";
   }
 
-  // 更新缓存并持久化
+  // 更新缓存并持久化到浏览器本地
   priceCache = {...newPriceMap};
   localStorage.setItem("assetPriceCache", JSON.stringify(priceCache));
-  render(priceCache, newRate);
+  render(priceCache);
   countdownSec = REFRESH_MS / 1000;
 }
 
