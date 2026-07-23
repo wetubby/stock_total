@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>资产持仓监控</title>
+<title>资产持仓监控面板</title>
 <style>
 *{box-sizing:border-box;font-family:system-ui, sans-serif;}
 body{max-width:1100px;margin:30px auto;padding:0 16px;background:#0f1419;color:#e6e6e6;}
@@ -14,12 +14,14 @@ th{color:#aaa;font-weight:normal;}
 .negative{color:#ff4d4f;}
 .total-box{background:#1a2028;padding:18px;border-radius:8px;margin:20px 0;}
 .info{color:#999;font-size:14px}
+.warn{color:#faad14;}
 </style>
 </head>
 <body>
 <h2>持仓资产监控面板</h2>
 <div class="info">
 下次自动刷新：<span id="countdown">5:00</span> | 最近更新：<span id="lastUpdate">-</span>
+<div class="warn" id="warnTip"></div>
 </div>
 
 <table>
@@ -47,7 +49,7 @@ th{color:#aaa;font-weight:normal;}
 </div>
 
 <script>
-// ========== 你的持仓数据【在这里修改】 ==========
+// ========== 你的持仓数据 ==========
 const holdings = [
   {market:"美股",symbol:"CRCL",qty:581,costPrice:70.6299,costTotal:41036,coingeckoId:"",yahooTicker:"CRCL"},
   {market:"虚拟货币",symbol:"BTC",qty:0.30939,costPrice:63867.61,costTotal:19760,coingeckoId:"bitcoin",yahooTicker:""},
@@ -56,16 +58,30 @@ const holdings = [
   {market:"虚拟货币",symbol:"UNI",qty:1114.53,costPrice:3.5262,costTotal:3930,coingeckoId:"uniswap",yahooTicker:""}
 ];
 
-const REFRESH_MS = 5 * 60 * 1000; // 5分钟刷新行情
+const REFRESH_MS = 5 * 60 * 1000; // 5分钟刷新
 let countdownSec = REFRESH_MS / 1000;
+const warnTip = document.getElementById("warnTip");
 
-// 渲染表格
 function render(prices){
   let html = "";
   let sumCost = 0, sumValue = 0;
   holdings.forEach(item=>{
     sumCost += item.costTotal;
     const price = prices[item.symbol];
+    if(!price){
+      html += `
+      <tr>
+        <td>${item.market}</td>
+        <td>${item.symbol}</td>
+        <td>${item.qty}</td>
+        <td>${item.costPrice.toFixed(2)}</td>
+        <td>${item.costTotal.toFixed(2)}</td>
+        <td class="warn">获取失败</td>
+        <td>-</td><td>-</td><td>-</td>
+      </tr>
+      `;
+      return;
+    }
     const marketValue = item.qty * price;
     const pnl = marketValue - item.costTotal;
     const pnlPct = (pnl / item.costTotal *100).toFixed(2);
@@ -113,30 +129,42 @@ async function fetchCryptoPrices(){
   return map;
 }
 
-// 获取美股价格 Yahoo Finance (使用公开cors代理)
+// 获取美股价格 Yahoo Finance
 async function fetchStockPrice(){
   const ticker = "CRCL";
-  const proxy = `https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
+  const targetUrl = encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`);
+  const proxy = `https://corsproxy.io/?${targetUrl}`;
   const res = await fetch(proxy);
   const j = await res.json();
   const price = j.chart.result[0].meta.regularMarketPrice;
   return {"CRCL":price};
 }
 
-// 统一拉取全部行情
+// 并行拉取：币价、股价互不阻塞
 async function loadQuotes(){
+  warnTip.innerText = "";
+  const priceMap = {};
+  // 先请求加密货币
   try{
     const cryptoMap = await fetchCryptoPrices();
-    const stockMap = await fetchStockPrice();
-    const allPrice = {...cryptoMap, ...stockMap};
-    render(allPrice);
-    countdownSec = REFRESH_MS / 1000;
+    Object.assign(priceMap, cryptoMap);
   }catch(e){
-    console.error("行情获取失败",e);
+    warnTip.innerText = "⚠️ 加密货币行情获取失败";
+    console.error("币价接口异常",e);
   }
+  // 独立请求美股，失败不影响币价展示
+  try{
+    const stockMap = await fetchStockPrice();
+    Object.assign(priceMap, stockMap);
+  }catch(e){
+    warnTip.innerText += " ⚠️ CRCL美股行情代理暂时不可用";
+    console.error("美股接口异常",e);
+  }
+  render(priceMap);
+  countdownSec = REFRESH_MS / 1000;
 }
 
-// 倒计时展示
+// 倒计时
 function tickCountdown(){
   countdownSec--;
   const m = Math.floor(countdownSec /60);
