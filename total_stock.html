@@ -24,9 +24,10 @@ tr:last-child td{border-bottom:none;}
 
 .card{background:#141920;padding:20px;border-radius:10px;margin:16px 0;}
 .flex-row{display:flex;gap:20px;flex-wrap:wrap;}
-.chart-wrap{flex:1;min-width:420px;}
+.chart-wrap{flex:1;min-width:420px;max-height:340px;}
 .stat-line{margin:8px 0;}
 .divider{height:1px;background:#222830;margin:14px 0;}
+canvas{max-height:260px !important;}
 </style>
 </head>
 <body>
@@ -71,12 +72,12 @@ tr:last-child td{border-bottom:none;}
 累计净值变动：<b id="rangeChange">-</b> &nbsp;&nbsp;
 数据天数：<b id="dataDays">-</b> 天
 </div>
-<canvas id="assetChart" height="140"></canvas>
+<canvas id="assetChart"></canvas>
 </div>
 
 <div class="card chart-wrap">
 <h3>资产市值分布占比</h3>
-<canvas id="pieChart" height="140"></canvas>
+<canvas id="pieChart"></canvas>
 </div>
 </div>
 
@@ -100,9 +101,7 @@ let usdtCnyRate = parseFloat(localStorage.getItem("usdtCnyRate")) || 7.25;
 let lineChart = null;
 let pieChart = null;
 
-// ========== 【汇率切换开关】==========
-// mode = "otc" → USDT/CNY OTC币圈汇率(7.25左右)
-// mode = "bank" → 美元兑人民币中间价(6.77左右)
+// ========== 汇率切换开关 ==========
 const EXCHANGE_RATE_MODE = "bank";
 
 function fetchWithTimeout(url, timeout = 8000) {
@@ -142,24 +141,24 @@ function renderLineChart(){
   lineChart = new Chart(ctx,{
     type:"line",
     data:{
-      labels,labels,
+      labels:labels,
       datasets:[{
         label:"总资产净值 (USD)",
         data:data,
         borderColor:"#52c41a",
         backgroundColor:"rgba(82,196,26,0.1)",
-        fill:true,tension:0.3,pointRadius:3,borderWidth:2
+        fill:true,tension:0.3,pointRadius:5,pointHoverRadius:7,borderWidth:2
       }]
     },
     options:{
-      responsive:true,maintainAspectRatio:false,
+      responsive:true,maintainAspectRatio:true,
       plugins:{
         legend:{labels:{color:"#aaa"}},
         tooltip:{callbacks:{label:ctx=>`净值: ${ctx.parsed.y.toFixed(2)} USD`}}
       },
       scales:{
-        x:{ticks:{color:"#888"},grid:{color:"#222830"}},
-        y:{ticks:{color:"#888"},grid:{color:"#222830"}}
+        x:{ticks:{color:"#888"},grid:{color:"#222830"},display:true},
+        y:{ticks:{color:"#888"},grid:{color:"#222830"},display:true}
       }
     }
   });
@@ -177,17 +176,17 @@ function renderLineChart(){
 }
 
 // 绘制资产占比饼图
-function renderPieChart(holdMarketValue){
+function renderPieChart(assetPieData){
   const ctx = document.getElementById("pieChart").getContext("2d");
-  const labels = holdMarketValue.map(i=>i.symbol);
-  const data = holdMarketValue.map(i=>i.value);
+  const labels = assetPieData.map(i=>i.symbol);
+  const data = assetPieData.map(i=>i.value);
   const colors = ["#722ed1","#1890ff","#13c2c2","#faad14","#f5222d"];
   if(pieChart) pieChart.destroy();
   pieChart = new Chart(ctx,{
     type:"doughnut",
-    data:{labels,datasets:[{data,backgroundColor:colors,borderWidth:0}]},
+    data:{labels:labels,datasets:[{data:data,backgroundColor:colors,borderWidth:0}]},
     options:{
-      responsive:true,maintainAspectRatio:false,
+      responsive:true,maintainAspectRatio:true,
       plugins:{
         legend:{labels:{color:"#aaa"}},
         tooltip:{callbacks:{label:function(item){
@@ -204,7 +203,22 @@ function renderPieChart(holdMarketValue){
 function render(prices){
   let html = "";
   let sumCost = 0, sumValue = 0;
+  // 【修复】独立生成饼图数据，不依赖表格渲染提前return
   const assetPieData = [];
+  // 先预计算全部市值，保证饼图一定有数据
+  for(const item of holdings){
+    const raw = prices[item.symbol];
+    let price;
+    if(typeof raw === "number") price = raw;
+    else if(raw && raw.price) price = raw.price;
+    else price = null;
+    if(!price) continue;
+    const marketValue = item.qty * price;
+    assetPieData.push({symbol:item.symbol,value:marketValue});
+    sumValue += marketValue;
+  }
+
+  // 渲染表格
   holdings.forEach(item=>{
     sumCost += item.costTotal;
     const raw = prices[item.symbol];
@@ -216,8 +230,6 @@ function render(prices){
       return;
     }
     const marketValue = item.qty * price;
-    assetPieData.push({symbol:item.symbol,value:marketValue});
-    sumValue += marketValue;
     const pnl = marketValue - item.costTotal;
     const pnlPct = (pnl/item.costTotal*100).toFixed(2);
     const cls = pnl>=0?"positive":"negative";
@@ -248,7 +260,7 @@ function render(prices){
   document.getElementById("totalValueCNY").innerText = totalCNY.toFixed(2);
   document.getElementById("totalPnlCNY").innerHTML = `<span class="${clsTotal}">${pnlCNY.toFixed(2)}</span>`;
   document.getElementById("lastUpdate").innerText = new Date().toLocaleString();
-  if(sumValue>0){
+  if(sumValue>0 && assetPieData.length>0){
     updateDailyHistory(sumValue);
     renderLineChart();
     renderPieChart(assetPieData);
@@ -272,7 +284,6 @@ async function fetchCryptoPrices(){
 async function fetchExchangeRate(){
   try{
     if(EXCHANGE_RATE_MODE === "otc"){
-      // USDT/CNY OTC汇率（当前7.2附近）
       const url = "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=cny";
       const res = await fetch(url);
       const json = await res.json();
@@ -280,9 +291,6 @@ async function fetchExchangeRate(){
         usdtCnyRate = json.tether.cny;
         localStorage.setItem("usdtCnyRate",usdtCnyRate);
       }
-    }else{
-      // 方案：美元兑人民币中间价（需要额外接口，国内源）
-      // 如需切换银行汇率，我可以补充接口
     }
   }catch(e){console.log("汇率获取失败，使用缓存");}
 }
@@ -331,7 +339,8 @@ function tickCountdown(){
   countdownSec--;
   const m = Math.floor(countdownSec/60);
   const s = countdownSec%60;
-  document.getElementById("countdown").innerText = `${m}:${m}:${s.toString().padStart(2,"0")}`;
+  // 修复：时分秒笔误
+  document.getElementById("countdown").innerText = `${m}:${s.toString().padStart(2,"0")}`;
   if(countdownSec <=0) loadQuotes();
 }
 
