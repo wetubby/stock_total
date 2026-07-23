@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>资产持仓监控</title>
+<style>
+*{box-sizing:border-box;font-family:system-ui, sans-serif;}
+body{max-width:1100px;margin:30px auto;padding:0 16px;background:#0f1419;color:#e6e6e6;}
+table{width:100%;border-collapse:collapse;margin:20px 0;}
+th,td{padding:12px 10px;text-align:left;border-bottom:1px solid #2c3238;}
+th{color:#aaa;font-weight:normal;}
+.positive{color:#52c41a;}
+.negative{color:#ff4d4f;}
+.total-box{background:#1a2028;padding:18px;border-radius:8px;margin:20px 0;}
+.info{color:#999;font-size:14px}
+</style>
+</head>
+<body>
+<h2>持仓资产监控面板</h2>
+<div class="info">
+下次自动刷新：<span id="countdown">5:00</span> | 最近更新：<span id="lastUpdate">-</span>
+</div>
+
+<table>
+<thead>
+<tr>
+<th>市场</th>
+<th>品种</th>
+<th>持仓数量</th>
+<th>成本价(USD)</th>
+<th>投入总成本(USD)</th>
+<th>当前市价(USD)</th>
+<th>当前市值(USD)</th>
+<th>盈亏(USD)</th>
+<th>盈亏比例</th>
+</tr>
+</thead>
+<tbody id="tableBody"></tbody>
+</table>
+
+<div class="total-box">
+<h3>汇总统计</h3>
+<p>总投入成本：<span id="totalCost"></span> USD</p>
+<p>当前总市值：<span id="totalValue"></span> USD</p>
+<p>总盈亏：<span id="totalPnl"></span> USD（<span id="totalPnlPct"></span>）</p>
+</div>
+
+<script>
+// ========== 你的持仓数据【在这里修改】 ==========
+const holdings = [
+  {market:"美股",symbol:"CRCL",qty:581,costPrice:70.6299,costTotal:41036,coingeckoId:"",yahooTicker:"CRCL"},
+  {market:"虚拟货币",symbol:"BTC",qty:0.30939,costPrice:63867.61,costTotal:19760,coingeckoId:"bitcoin",yahooTicker:""},
+  {market:"虚拟货币",symbol:"PENDLE",qty:2038.65,costPrice:1.53,costTotal:3120,coingeckoId:"pendle",yahooTicker:""},
+  {market:"虚拟货币",symbol:"AAVE",qty:37.46,costPrice:93.43,costTotal:3500,coingeckoId:"aave",yahooTicker:""},
+  {market:"虚拟货币",symbol:"UNI",qty:1114.53,costPrice:3.5262,costTotal:3930,coingeckoId:"uniswap",yahooTicker:""}
+];
+
+const REFRESH_MS = 5 * 60 * 1000; // 5分钟刷新行情
+let countdownSec = REFRESH_MS / 1000;
+
+// 渲染表格
+function render(prices){
+  let html = "";
+  let sumCost = 0, sumValue = 0;
+  holdings.forEach(item=>{
+    sumCost += item.costTotal;
+    const price = prices[item.symbol];
+    const marketValue = item.qty * price;
+    const pnl = marketValue - item.costTotal;
+    const pnlPct = (pnl / item.costTotal *100).toFixed(2);
+    const cls = pnl >=0 ? "positive" : "negative";
+
+    html += `
+    <tr>
+      <td>${item.market}</td>
+      <td>${item.symbol}</td>
+      <td>${item.qty}</td>
+      <td>${item.costPrice.toFixed(2)}</td>
+      <td>${item.costTotal.toFixed(2)}</td>
+      <td>${price.toFixed(2)}</td>
+      <td>${marketValue.toFixed(2)}</td>
+      <td class="${cls}">${pnl.toFixed(2)}</td>
+      <td class="${cls}">${pnlPct}%</td>
+    </tr>
+    `;
+    sumValue += marketValue;
+  })
+  document.getElementById("tableBody").innerHTML = html;
+
+  const totalPnl = sumValue - sumCost;
+  const totalPnlPct = (totalPnl / sumCost *100).toFixed(2);
+  const clsTotal = totalPnl >=0 ? "positive" : "negative";
+
+  document.getElementById("totalCost").innerText = sumCost.toFixed(2);
+  document.getElementById("totalValue").innerText = sumValue.toFixed(2);
+  document.getElementById("totalPnl").innerHTML = `<span class="${clsTotal}">${totalPnl.toFixed(2)}</span>`;
+  document.getElementById("totalPnlPct").innerHTML = `<span class="${clsTotal}">${totalPnlPct}%</span>`;
+  document.getElementById("lastUpdate").innerText = new Date().toLocaleString();
+}
+
+// 获取加密货币价格 CoinGecko
+async function fetchCryptoPrices(){
+  const ids = holdings.filter(h=>h.coingeckoId).map(h=>h.coingeckoId).join(",");
+  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
+  const res = await fetch(url);
+  const json = await res.json();
+  const map = {};
+  map["BTC"] = json.bitcoin.usd;
+  map["PENDLE"] = json.pendle.usd;
+  map["AAVE"] = json.aave.usd;
+  map["UNI"] = json.uniswap.usd;
+  return map;
+}
+
+// 获取美股价格 Yahoo Finance (使用公开cors代理)
+async function fetchStockPrice(){
+  const ticker = "CRCL";
+  const proxy = `https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
+  const res = await fetch(proxy);
+  const j = await res.json();
+  const price = j.chart.result[0].meta.regularMarketPrice;
+  return {"CRCL":price};
+}
+
+// 统一拉取全部行情
+async function loadQuotes(){
+  try{
+    const cryptoMap = await fetchCryptoPrices();
+    const stockMap = await fetchStockPrice();
+    const allPrice = {...cryptoMap, ...stockMap};
+    render(allPrice);
+    countdownSec = REFRESH_MS / 1000;
+  }catch(e){
+    console.error("行情获取失败",e);
+  }
+}
+
+// 倒计时展示
+function tickCountdown(){
+  countdownSec--;
+  const m = Math.floor(countdownSec /60);
+  const s = countdownSec %60;
+  document.getElementById("countdown").innerText = `${m}:${s.toString().padStart(2,"0")}`;
+  if(countdownSec <=0){
+    loadQuotes();
+  }
+}
+
+loadQuotes();
+setInterval(tickCountdown, 1000);
+setInterval(loadQuotes, REFRESH_MS);
+</script>
+</body>
+</html>
