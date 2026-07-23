@@ -12,9 +12,10 @@ th,td{padding:12px 10px;text-align:left;border-bottom:1px solid #2c3238;}
 th{color:#aaa;font-weight:normal;}
 .positive{color:#52c41a;}
 .negative{color:#ff4d4f;}
+.warn{color:#faad14;}
+.tag-ext{font-size:12px;margin-left:6px;color:#999;}
 .total-box{background:#1a2028;padding:18px;border-radius:8px;margin:20px 0;}
 .info{color:#999;font-size:14px}
-.warn{color:#faad14;}
 </style>
 </head>
 <body>
@@ -49,7 +50,7 @@ th{color:#aaa;font-weight:normal;}
 </div>
 
 <script>
-// ========== 你的持仓数据 ==========
+// ========== 你的持仓数据（无需修改） ==========
 const holdings = [
   {market:"美股",symbol:"CRCL",qty:581,costPrice:70.6299,costTotal:41036,coingeckoId:"",yahooTicker:"CRCL"},
   {market:"虚拟货币",symbol:"BTC",qty:0.30939,costPrice:63867.61,costTotal:19760,coingeckoId:"bitcoin",yahooTicker:""},
@@ -61,14 +62,34 @@ const holdings = [
 const REFRESH_MS = 5 * 60 * 1000; // 5分钟刷新
 let countdownSec = REFRESH_MS / 1000;
 const warnTip = document.getElementById("warnTip");
+// 美股备用跨域代理
+const CORS_PROXY = "https://cors-anywhere.azm.workers.dev/";
 
+// 请求超时封装（取自美股备份，防止卡死）
+function fetchWithTimeout(url, timeout = 8000) {
+  return Promise.race([
+    fetch(url),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("请求超时")), timeout))
+  ]);
+}
+
+// 统一渲染函数：兼容币价纯数字 / 美股{price,tag}对象
 function render(prices){
   let html = "";
   let sumCost = 0, sumValue = 0;
   holdings.forEach(item=>{
     sumCost += item.costTotal;
-    const price = prices[item.symbol];
-    if(!price){
+    const raw = prices[item.symbol];
+    let price, tag = "";
+
+    // 判断是币价数字 还是 美股带标签对象
+    if(typeof raw === "number"){
+      price = raw;
+    }else if(raw && raw.price){
+      price = raw.price;
+      tag = raw.tag || "";
+    }else{
+      // 获取失败
       html += `
       <tr>
         <td>${item.market}</td>
@@ -82,6 +103,7 @@ function render(prices){
       `;
       return;
     }
+
     const marketValue = item.qty * price;
     const pnl = marketValue - item.costTotal;
     const pnlPct = (pnl / item.costTotal *100).toFixed(2);
@@ -94,7 +116,7 @@ function render(prices){
       <td>${item.qty}</td>
       <td>${item.costPrice.toFixed(2)}</td>
       <td>${item.costTotal.toFixed(2)}</td>
-      <td>${price.toFixed(2)}</td>
+      <td>${price.toFixed(2)} ${tag?`<span class="tag-ext">${tag}</span>`:""}</td>
       <td>${marketValue.toFixed(2)}</td>
       <td class="${cls}">${pnl.toFixed(2)}</td>
       <td class="${cls}">${pnlPct}%</td>
@@ -115,7 +137,7 @@ function render(prices){
   document.getElementById("lastUpdate").innerText = new Date().toLocaleString();
 }
 
-// 获取加密货币价格 CoinGecko
+// 【取自虚拟货币备份】CoinGecko直连获取币价，无需代理
 async function fetchCryptoPrices(){
   const ids = holdings.filter(h=>h.coingeckoId).map(h=>h.coingeckoId).join(",");
   const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
@@ -129,42 +151,58 @@ async function fetchCryptoPrices(){
   return map;
 }
 
-// 获取美股价格 Yahoo Finance
+// 【取自美股备份】Yahoo获取CRCL，支持盘前/盘中/盘后 + 超时代理
 async function fetchStockPrice(){
   const ticker = "CRCL";
-  const targetUrl = encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`);
-  const proxy = `https://corsproxy.io/?${targetUrl}`;
-  const res = await fetch(proxy);
+  const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
+  const url = CORS_PROXY + targetUrl;
+  const res = await fetchWithTimeout(url);
   const j = await res.json();
-  const price = j.chart.result[0].meta.regularMarketPrice;
-  return {"CRCL":price};
+  const meta = j.chart.result[0].meta;
+
+  let usePrice = meta.regularMarketPrice;
+  let tag = "";
+  const nowTs = Date.now() / 1000;
+
+  const preTs = meta.preMarketTime;
+  const regTs = meta.regularMarketTime;
+  const postTs = meta.postMarketTime;
+
+  if(nowTs < regTs && meta.preMarketPrice){
+    usePrice = meta.preMarketPrice;
+    tag = "[盘前]";
+  }else if(nowTs > regTs && meta.postMarketPrice){
+    usePrice = meta.postMarketPrice;
+    tag = "[盘后]";
+  }
+  return {"CRCL": {price:usePrice, tag:tag}};
 }
 
-// 并行拉取：币价、股价互不阻塞
+// 独立并行请求，互不阻塞
 async function loadQuotes(){
   warnTip.innerText = "";
   const priceMap = {};
-  // 先请求加密货币
+  // 加密货币（直连CoinGecko，优先保证币价）
   try{
     const cryptoMap = await fetchCryptoPrices();
     Object.assign(priceMap, cryptoMap);
   }catch(e){
-    warnTip.innerText = "⚠️ 加密货币行情获取失败";
+    warnTip.innerText += "⚠️ 加密货币行情获取失败 ";
     console.error("币价接口异常",e);
   }
-  // 独立请求美股，失败不影响币价展示
+  // 美股（走代理，盘前盘后）
   try{
     const stockMap = await fetchStockPrice();
     Object.assign(priceMap, stockMap);
   }catch(e){
-    warnTip.innerText += " ⚠️ CRCL美股行情代理暂时不可用";
+    warnTip.innerText += "⚠️ CRCL美股代理请求失败 ";
     console.error("美股接口异常",e);
   }
   render(priceMap);
   countdownSec = REFRESH_MS / 1000;
 }
 
-// 倒计时
+// 倒计时逻辑
 function tickCountdown(){
   countdownSec--;
   const m = Math.floor(countdownSec /60);
@@ -175,6 +213,7 @@ function tickCountdown(){
   }
 }
 
+// 页面初始化
 loadQuotes();
 setInterval(tickCountdown, 1000);
 setInterval(loadQuotes, REFRESH_MS);
