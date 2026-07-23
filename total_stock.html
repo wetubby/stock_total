@@ -62,33 +62,19 @@ const holdings = [
 const REFRESH_MS = 5 * 60 * 1000;
 let countdownSec = REFRESH_MS / 1000;
 const warnTip = document.getElementById("warnTip");
-// 双代理，增加随机防缓存参数
+// 双代理轮询
 const proxyList = [
   "https://corsproxy.io/?",
   "https://cors-anywhere.azm.workers.dev/"
 ];
-// 缓存附带存储时间，超过10分钟清空旧缓存
-const CACHE_EXPIRE = 10 * 60 * 1000;
-let cacheData = JSON.parse(local.getItem("assetCache")) || {priceCache:{saveTime:0}};
-let priceCache = cacheData.saveTime + Date.now() > Date.now() ? cacheData.priceCache : {};
+// 从本地存储读取历史行情，刷新页面不丢失
+let priceCache = JSON.parse(localStorage.getItem("assetPriceCache")) || {};
 
-// 防缓存随机参数
-function getNoCacheUrl(target){
-  const rand = Math.random().toString(36).slice(2);
-  return `${target}&_r=${rand}`;
-}
-
-// 代理统一封装，添加no-cache指令给corsproxy
-async function proxyFetch(targetUrl){
-  const finalTarget = getNoCacheUrl(targetUrl);
-  for(const p of proxyList){
-    try{
-      const reqUrl = `${p}ttl=0&url=${encodeURIComponent(finalTarget)}`;
-      const res = await fetch(req, {signal: AbortSignal.timeout(9000), cache:"no-store"});
-      if(res.ok) return await res.json();
-    }catch(e){continue;}
-  }
-  throw new Error("全部代理请求失败");
+function fetchWithTimeout(url, timeout = 8000) {
+  return Promise.race([
+    fetch(url),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("请求超时")), timeout))
+  ]);
 }
 
 function render(prices){
@@ -98,19 +84,32 @@ function render(prices){
     sumCost += item.costTotal;
     const raw = prices[item.symbol];
     let price, tag = "";
+
     if(typeof raw === "number"){
       price = raw;
     }else if(raw && raw.price){
       price = raw.price;
       tag = raw.tag || "";
     }else{
-      html += `<tr><td>${item.market}</td><td>${item.symbol}</td><td>${item.qty}</td><td>${item.costPrice.toFixed(2)}</td><td>${item.costTotal.toFixed(2)}</td><td class="warn">暂无最新，沿用缓存</td><td>-</td><td>-</td><td>-</td></tr>`;
+      html += `
+      <tr>
+        <td>${item.market}</td>
+        <td>${item.symbol}</td>
+        <td>${item.qty}</td>
+        <td>${item.costPrice.toFixed(2)}</td>
+        <td>${item.costTotal.toFixed(2)}</td>
+        <td class="warn">暂无最新，沿用缓存</td>
+        <td>-</td><td>-</td><td>-</td>
+      </tr>
+      `;
       return;
     }
+
     const marketValue = item.qty * price;
     const pnl = marketValue - item.costTotal;
     const pnlPct = (pnl / item.costTotal *100).toFixed(2);
     const cls = pnl >=0 ? "positive" : "negative";
+
     html += `
     <tr>
       <td>${item.market}</td>
@@ -122,25 +121,29 @@ function render(prices){
       <td>${marketValue.toFixed(2)}</td>
       <td class="${cls}">${pnl.toFixed(2)}</td>
       <td class="${cls}">${pnlPct}%</td>
-    </tr>`;
+    </tr>
+    `;
     sumValue += marketValue;
   })
   document.getElementById("tableBody").innerHTML = html;
+
   const totalPnl = sumValue - sumCost;
   const totalPnlPct = (totalPnl / sumCost *100).toFixed(2);
   const clsTotal = totalPnl >=0 ? "positive" : "negative";
+
   document.getElementById("totalCost").innerText = sumCost.toFixed(2);
   document.getElementById("totalValue").innerText = sumValue.toFixed(2);
   document.getElementById("totalPnl").innerHTML = `<span class="${clsTotal}">${totalPnl.toFixed(2)}</span>`;
-  document.getElementById("totalPnlPct").innerHTML = `<span class="${clsTotal}">${totalPnlPct}</span>`;
+  document.getElementById("totalPnlPct").innerHTML = `<span class="${clsTotal}">${totalPnlPct}%</span>`;
   document.getElementById("lastUpdate").innerText = new Date().toLocaleString();
 }
 
-// 加密货币：统一走代理，修复微信无法加载
+// ========== 虚拟货币【完全不变】 ==========
 async function fetchCryptoPrices(){
   const ids = holdings.filter(h=>h.coingeckoId).map(h=>h.coingeckoId).join(",");
-  const target = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
-  const json = await proxyFetch(target);
+  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
+  const res = await fetch(url);
+  const json = await res.json();
   const map = {};
   map["BTC"] = json.bitcoin.usd;
   map["PENDLE"] = json.pendle.usd;
@@ -149,57 +152,73 @@ async function fetchCryptoPrices(){
   return map;
 }
 
-// 美股Yahoo，完整盘前盘后UTC判断
+// ========== Yahoo CRCL 盘前/盘后逻辑 + 多代理重试 ==========
 async function fetchStockPrice(){
   const ticker = "CRCL";
-  const target = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
-  const j = await proxyFetch(target);
-  const meta = j.chart.result[0].meta;
-  let usePrice = meta.regularMarketPrice;
-  let tag = "";
-  const nowUtcSec = Date.now() / 1000;
-  const regCloseTime = meta.regularMarketTime;
-  // 严格判断盘前盘后字段存在才替换
-  if (meta.preMarketPrice && nowUtcSec < regCloseTime) {
-    usePrice = meta.preMarketPrice;
-    tag = "[盘前]";
-  } else if (meta.postMarketPrice && nowUtcSec > regCloseTime) {
-    usePrice = meta.postMarketPrice;
-    tag = "[盘后]";
+  const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
+  for(const proxy of proxyList){
+    try{
+      const url = proxy + encodeURIComponent(targetUrl);
+      const res = await fetchWithTimeout(url);
+      const j = await res.json();
+      const meta = j.chart.result[0].meta;
+      let usePrice = meta.regularMarketPrice;
+      let tag = "";
+      const nowUtcSec = Date.now() / 1000;
+      const regCloseTime = meta.regularMarketTime;
+
+      if (nowUtcSec < regCloseTime && meta.preMarketPrice) {
+        usePrice = meta.preMarketPrice;
+        tag = "[盘前]";
+      } else if (nowUtcSec > regCloseTime && meta.postMarketPrice) {
+        usePrice = meta.postMarketPrice;
+        tag = "[盘后]";
+      }
+      return {"CRCL": {price:usePrice, tag:tag}};
+    }catch(err){
+      continue;
+    }
   }
-  return {"CRCL": {price:usePrice, tag:tag}};
+  return null;
 }
 
 async function loadQuotes(){
   warnTip.innerText = "";
   const newPriceMap = {...priceCache};
-  // 加密
+
   try{
     const cryptoMap = await fetchCryptoPrices();
     Object.assign(newPriceMap, cryptoMap);
   }catch(e){
-    warnTip.innerText += "加密行情请求失败，读取缓存 ";
+    warnTip.innerText += "⚠️ 加密货币行情获取失败 ";
   }
-  // 美股
+
   try{
     const stockMap = await fetchStockPrice();
-    Object.assign(newPriceMap, stockMap);
+    if(stockMap){
+      Object.assign(newPriceMap, stockMap);
+    }else{
+      warnTip.innerText += "⚠️ CRCL代理全部失效，沿用缓存价格";
+    }
   }catch(e){
-    warnTip.innerText += "美股行情请求失败，读取缓存 ";
+    warnTip.innerText += "⚠️ CRCL请求异常，沿用缓存价格";
   }
-  // 更新缓存+保存时间，10分钟过期
-  priceCache = newPriceMap;
-  localStorage.setItem("assetCache", JSON.stringify({priceCache,saveTime:Date.now()}));
+
+  // 更新缓存并持久化到浏览器本地
+  priceCache = {...newPriceMap};
+  localStorage.setItem("assetPriceCache", JSON.stringify(priceCache));
   render(priceCache);
   countdownSec = REFRESH_MS / 1000;
 }
 
 function tickCountdown(){
   countdownSec--;
-  const m = Math.floor(countdownSec / 60);
-  const s = countdownSec % 60;
+  const m = Math.floor(countdownSec /60);
+  const s = countdownSec %60;
   document.getElementById("countdown").innerText = `${m}:${s.toString().padStart(2,"0")}`;
-  if(countdownSec <= 0) loadQuotes();
+  if(countdownSec <=0){
+    loadQuotes();
+  }
 }
 
 loadQuotes();
