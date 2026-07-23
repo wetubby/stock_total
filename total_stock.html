@@ -12,9 +12,9 @@ th,td{padding:12px 10px;text-align:left;border-bottom:1px solid #2c3238;}
 th{color:#aaa;font-weight:normal;}
 .positive{color:#52c41a;}
 .negative{color:#ff4d4f;}
-.warn{color:#faad14;}
 .total-box{background:#1a2028;padding:18px;border-radius:8px;margin:20px 0;}
 .info{color:#999;font-size:14px}
+.warn{color:#faad14;}
 </style>
 </head>
 <body>
@@ -49,13 +49,13 @@ th{color:#aaa;font-weight:normal;}
 </div>
 
 <script>
-// 持仓数据
+// ========== 你的持仓数据【无需修改】 ==========
 const holdings = [
-  {market:"美股",symbol:"CRCL",qty:581,costPrice:70.6299,costTotal:41036,binanceSymbol:"",yahooTicker:"CRCL"},
-  {market:"虚拟货币",symbol:"BTC",qty:0.30939,costPrice:63867.61,costTotal:19760,binanceSymbol:"BTCUSDT",yahooTicker:""},
-  {market:"虚拟货币",symbol:"PENDLE",qty:2038.65,costPrice:1.53,costTotal:3120,binanceSymbol:"PENDLEUSDT",yahooTicker:""},
-  {market:"虚拟货币",symbol:"AAVE",qty:37.46,costPrice:93.43,costTotal:3500,binanceSymbol:"AAVEUSDT",yahooTicker:""},
-  {market:"虚拟货币",symbol:"UNI",qty:1114.53,costPrice:3.5262,costTotal:3930,binanceSymbol:"UNIUSDT",yahooTicker:""}
+  {market:"美股",symbol:"CRCL",qty:581,costPrice:70.6299,costTotal:41036,coingeckoId:"bitcoin",yahooTicker:"CRCL"},
+  {market:"虚拟货币",symbol:"BTC",qty:0.30939,costPrice:63867.61,costTotal:19760,coingeckoId:"bitcoin",yahooTicker:""},
+  {market:"虚拟货币",symbol:"PENDLE",qty:2038.65,costPrice:1.53,costTotal:3120,coingeckoId:"pendle",yahooTicker:""},
+  {market:"虚拟货币",symbol:"AAVE",qty:37.46,costPrice:93.43,costTotal:3500,coingeckoId:"aave",yahooTicker:""},
+  {market:"虚拟货币",symbol:"UNI",qty:1114.53,costPrice:3.5262,costTotal:3930,coingeckoId:"uniswap",yahooTicker:""}
 ];
 
 const REFRESH_MS = 5 * 60 * 1000;
@@ -63,7 +63,6 @@ let countdownSec = REFRESH_MS / 1000;
 const warnTip = document.getElementById("warnTip");
 const CORS_PROXY = "https://corsproxy.io/?";
 
-// 渲染表格
 function render(prices){
   let html = "";
   let sumCost = 0, sumValue = 0;
@@ -117,23 +116,22 @@ function render(prices){
   document.getElementById("lastUpdate").innerText = new Date().toLocaleString();
 }
 
-// 币安批量获取币价（无需代理）
+// 获取加密货币价格（走代理！）
 async function fetchCryptoPrices(){
-  const symbolList = holdings.filter(h=>h.binanceSymbol).map(x=>x.binanceSymbol).join(",");
-  const url = `https://api.binance.com/api/v3/ticker/price?symbols=["${symbolList}"]`;
+  const ids = holdings.filter(h=>h.coingeckoId).map(h=>h.coingeckoId).join(",");
+  const target = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
+  const url = CORS_PROXY + encodeURIComponent(target);
   const res = await fetch(url);
-  const data = await res.json();
+  const json = await res.json();
   const map = {};
-  data.forEach(item=>{
-    if(item.symbol === "BTCUSDT") map["BTC"] = parseFloat(item.price);
-    if(item.symbol === "PENDLEUSDT") map["PENDLE"] = parseFloat(item.price);
-    if(item.symbol === "AAVEUSDT") map["AAVE"] = parseFloat(item.price);
-    if(item.symbol === "UNIUSDT") map["UNI"] = parseFloat(item.price);
-  });
+  map["BTC"] = json.bitcoin.usd;
+  map["PENDLE"] = json.pendle.usd;
+  map["AAVE"] = json.aave.usd;
+  map["UNI"] = json.uniswap.usd;
   return map;
 }
 
-// 美股CRCL（保持原有代理不变，当前可用）
+// 获取美股CRCL（走代理）
 async function fetchStockPrice(){
   const ticker = "CRCL";
   const target = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
@@ -147,21 +145,21 @@ async function fetchStockPrice(){
 async function loadQuotes(){
   warnTip.innerText = "";
   const priceMap = {};
-  // 加密货币（币安直连，不走代理）
+  // 加密货币
   try{
     const cryptoMap = await fetchCryptoPrices();
     Object.assign(priceMap, cryptoMap);
   }catch(e){
-    warnTip.innerText += "⚠️ 加密货币行情获取失败 ";
-    console.error("币安接口异常",e);
+    warnTip.innerText += "⚠️ 加密货币行情请求失败 ";
+    console.error("币价错误",e);
   }
   // 美股
   try{
     const stockMap = await fetchStockPrice();
     Object.assign(priceMap, stockMap);
   }catch(e){
-    warnTip.innerText += "⚠️ CRCL美股行情获取失败 ";
-    console.error("美股接口异常",e);
+    warnTip.innerText += "⚠️ CRCL美股行情请求失败 ";
+    console.error("美股错误",e);
   }
   render(priceMap);
   countdownSec = REFRESH_MS / 1000;
