@@ -59,15 +59,13 @@ const holdings = [
   {market:"虚拟货币",symbol:"UNI",qty:1114.53,costPrice:3.5262,costTotal:3930,coingeckoId:"uniswap",yahooTicker:""}
 ];
 
-// Polygon API Key
 const POLYGON_KEY = "MZirzrQ3PS1TwEv5DtAB_R3iXzUj4eD4";
 const REFRESH_MS = 5 * 60 * 1000;
 let countdownSec = REFRESH_MS / 1000;
 const warnTip = document.getElementById("warnTip");
-// 全局缓存：接口失败时沿用上次价格
 let priceCache = {};
+const PROXY = "https://corsproxy.io/?";
 
-// 请求超时封装
 function fetchWithTimeout(url, timeout = 8000) {
   return Promise.race([
     fetch(url),
@@ -75,7 +73,6 @@ function fetchWithTimeout(url, timeout = 8000) {
   ]);
 }
 
-// 渲染函数（兼容币价数字 / 美股{price,tag}对象）
 function render(prices){
   let html = "";
   let sumCost = 0, sumValue = 0;
@@ -137,7 +134,7 @@ function render(prices){
   document.getElementById("lastUpdate").innerText = new Date().toLocaleString();
 }
 
-// ========== 虚拟货币逻辑完全原样保留，无修改 ==========
+// ========== 虚拟货币 完全保留原有逻辑 ==========
 async function fetchCryptoPrices(){
   const ids = holdings.filter(h=>h.coingeckoId).map(h=>h.coingeckoId).join(",");
   const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
@@ -151,53 +148,40 @@ async function fetchCryptoPrices(){
   return map;
 }
 
-// ========== 美股：Polygon原生接口，无代理，自带盘前/盘后 ==========
+// ========== Polygon美股获取逻辑【修复价格优先级】 ==========
 async function fetchStockPrice(){
   const ticker = "CRCL";
-  // Polygon 聚合报价接口，包含盘前/盘中/盘后
-  const url = `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?apiKey=${POLYGON_KEY}`;
+  const snapshotTarget = `https://api.polygon.io/v3/snapshot?ticker=${ticker}&apiKey=${POLYGON_KEY}`;
+  const url = PROXY + encodeURIComponent(snapshotTarget);
   const res = await fetchWithTimeout(url);
-  const data = await res.json();
+  const snapData = await res.json();
+  console.log("Polygon原始返回：", snapData);
 
-  if(!data.results || data.results.length === 0) return null;
-  const item = data.results[0];
-  // 免费版返回当日收盘，同时提供盘前盘后最新报价
-  const now = Date.now();
-  const marketCloseTs = item.t + 6.5 * 3600 * 1000; // 美东常规收盘时间戳
-  let usePrice = item.c;
+  let usePrice = null;
   let tag = "";
 
-  // Polygon 盘前盘后实时报价接口
-  const snapshotUrl = `https://api.polygon.io/v3/snapshot?ticker=${ticker}&apiKey=${POLYGON_KEY}`;
-  try {
-    const snapRes = await fetchWithTimeout(snapshotUrl);
-    const snapData = await snapRes.json();
-    if(snapData.results){
-      const snap = snapData.results;
-      // 盘前
-      if(snap.preMarket && snap.preMarket.price){
-        usePrice = snap.preMarket.price;
-        tag = "[盘前]";
-      }
-      // 盘后
-      else if(snap.postMarket && snap.postMarket.price){
-        usePrice = snap.postMarket.price;
-        tag = "[盘后]";
-      }
+  if(snapData.results){
+    const snap = snapData.results;
+    // 优先级：盘前 > 盘后 > 最新成交
+    if(snap.preMarket && typeof snap.preMarket.price === "number"){
+      usePrice = snap.preMarket.price;
+      tag = "[盘前]";
+    }else if(snap.postMarket && typeof snap.postMarket.price === "number"){
+      usePrice = snap.postMarket.price;
+      tag = "[盘后]";
+    }else if(snap.lastTrade && typeof snap.lastTrade.p === "number"){
+      usePrice = snap.lastTrade.p;
+      tag = "";
     }
-  } catch(e) {
-    console.log("快照接口失败，使用常规收盘价", e);
   }
-
+  if(!usePrice) return null;
   return {"CRCL": {price:usePrice, tag:tag}};
 }
 
-// 统一拉取行情，币股隔离
 async function loadQuotes(){
   warnTip.innerText = "";
   const newPriceMap = {...priceCache};
 
-  // 加密货币
   try{
     const cryptoMap = await fetchCryptoPrices();
     Object.assign(newPriceMap, cryptoMap);
@@ -206,13 +190,15 @@ async function loadQuotes(){
     console.error("币价异常",e);
   }
 
-  // 美股Polygon
   try{
     const stockMap = await fetchStockPrice();
-    if(stockMap) Object.assign(newPriceMap, stockMap);
-    else warnTip.innerText += "⚠️ CRCL行情无返回，沿用缓存 ";
+    if(stockMap){
+      Object.assign(newPriceMap, stockMap);
+    }else{
+      warnTip.innerText += "⚠️ CRCL暂无最新行情，沿用上次缓存价格";
+    }
   }catch(e){
-    warnTip.innerText += "⚠️ CRCL Polygon接口异常，沿用缓存 ";
+    warnTip.innerText += "⚠️ CRCL行情请求超时，沿用上次缓存价格";
     console.error("美股异常",e);
   }
 
@@ -221,7 +207,6 @@ async function loadQuotes(){
   countdownSec = REFRESH_MS / 1000;
 }
 
-// 倒计时
 function tickCountdown(){
   countdownSec--;
   const m = Math.floor(countdownSec /60);
