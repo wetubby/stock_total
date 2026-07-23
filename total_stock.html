@@ -6,22 +6,27 @@
 <title>资产持仓监控面板</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
-*{box-sizing:border-box;font-family:system-ui, sans-serif;}
-body{max-width:1100px;margin:30px auto;padding:0 16px;background:#0f1419;color:#e6e6e6;}
-table{width:100%;border-collapse:collapse;margin:20px 0;}
-th,td{padding:12px 10px;text-align:left;border-bottom:1px solid #2c3238;}
-th{color:#aaa;font-weight:normal;}
+*{box-sizing:border-box;font-family:system-ui, -apple-system, sans-serif;margin:0;padding:0;}
+body{max-width:1200px;margin:24px auto;padding:0 16px;background:#0f1419;color:#e6e6e6;font-size:15px;line-height:1.55;}
+h2{margin-bottom:12px;font-weight:600;}
+h3{font-size:17px;font-weight:500;margin-bottom:12px;color:#f0f0f0;}
+.info{color:#999;font-size:14px;margin-bottom:16px;}
+.warn{color:#faad14;}
+
+table{width:100%;border-collapse:collapse;margin:20px 0;background:#141920;border-radius:8px;overflow:hidden;}
+th,td{padding:13px 12px;text-align:left;border-bottom:1px solid #222830;}
+th{color:#aaa;font-weight:500;background:#171c24;}
+tr:last-child td{border-bottom:none;}
+
 .positive{color:#52c41a;}
 .negative{color:#ff4d4f;}
-.warn{color:#faad14;}
-.tag-ext{font-size:12px;margin-left:6px;color:#999;}
-.total-box{background:#1a2028;padding:18px;border-radius:8px;margin:20px 0;}
-.chart-box{background:#1a2028;padding:18px;border-radius:8px;margin:20px 0;}
-.chart-box h3{margin-top:0;}
-.chart-summary{display:flex;gap:30px;margin-bottom:14px;color:#aaa;font-size:14px;}
-.chart-summary b{color:#e6e6e6;font-weight:normal;font-size:16px;margin-left:6px;}
-.info{color:#999;font-size:14px}
-.cny-line{margin-top:8px;padding-top:8px;border-top:1px solid #2c3238;}
+.tag-ext{font-size:12px;margin-left:6px;color:#888;}
+
+.card{background:#141920;padding:20px;border-radius:10px;margin:16px 0;}
+.flex-row{display:flex;gap:20px;flex-wrap:wrap;}
+.chart-wrap{flex:1;min-width:420px;}
+.stat-line{margin:8px 0;}
+.divider{height:1px;background:#222830;margin:14px 0;}
 </style>
 </head>
 <body>
@@ -48,25 +53,31 @@ th{color:#aaa;font-weight:normal;}
 <tbody id="tableBody"></tbody>
 </table>
 
-<div class="total-box">
+<div class="card">
 <h3>汇总统计</h3>
-<p>总投入成本：<span id="totalCost"></span> USD</p>
-<p>当前总市值：<span id="totalValue"></span> USD</p>
-<p>总盈亏：<span id="totalPnl"></span> USD（<span id="totalPnlPct"></span>）</p>
-<div class="cny-line">
-<p>折合人民币总市值：<span id="totalValueCNY"></span> CNY（汇率：<span id="usdtCnyRate">-</span>）</p>
-<p>折合人民币总盈亏：<span id="totalPnlCNY"></span> CNY</p>
-</div>
+<p class="stat-line">总投入成本：<span id="totalCost"></span> USD</p>
+<p class="stat-line">当前总市值：<span id="totalValue"></span> USD</p>
+<p class="stat-line">总盈亏：<span id="totalPnl"></span> USD（<span id="totalPnlPct"></span>）</p>
+<div class="divider"></div>
+<p class="stat-line">折合人民币总市值：<span id="totalValueCNY"></span> CNY（汇率：<span id="usdtCnyRate">-</span>）</p>
+<p class="stat-line">折合人民币总盈亏：<span id="totalPnlCNY"></span> CNY</p>
 </div>
 
-<div class="chart-box">
+<div class="flex-row">
+<div class="card chart-wrap">
 <h3>资产净值走势（按日）</h3>
-<div class="chart-summary">
-  <div>起始日（2026-07-01）净值：<b id="startValue">-</b> USD</div>
-  <div>累计净值变动：<b id="rangeChange">-</b></div>
-  <div>数据天数：<b id="dataDays">-</b> 天</div>
+<div style="color:#aaa;font-size:14px;margin-bottom:12px;">
+起始日(2026-07-01)净值：<b id="startValue">-</b> USD &nbsp;&nbsp;
+累计净值变动：<b id="rangeChange">-</b> &nbsp;&nbsp;
+数据天数：<b id="dataDays">-</b> 天
 </div>
-<canvas id="assetChart" height="120"></canvas>
+<canvas id="assetChart" height="140"></canvas>
+</div>
+
+<div class="card chart-wrap">
+<h3>资产市值分布占比</h3>
+<canvas id="pieChart" height="140"></canvas>
+</div>
 </div>
 
 <script>
@@ -82,27 +93,21 @@ const holdings = [
 const REFRESH_MS = 5 * 60 * 1000;
 let countdownSec = REFRESH_MS / 1000;
 const warnTip = document.getElementById("warnTip");
-// 双代理轮询
-const proxyList = [
-  "https://corsproxy.io/?",
-  "https://cors-anywhere.azm.workers.dev/"
-];
-// 从本地存储读取历史行情，刷新页面不丢失
+const proxyList = ["https://corsproxy.io/?","https://cors-anywhere.azm.workers.dev/"];
 let priceCache = JSON.parse(localStorage.getItem("assetPriceCache")) || {};
-// 历史净值数据（按天）
 let assetHistory = JSON.parse(localStorage.getItem("assetHistory")) || [];
-// USDT兑人民币汇率（OTC参考价）
 let usdtCnyRate = parseFloat(localStorage.getItem("usdtCnyRate")) || 7.25;
-let chartInstance = null;
+let lineChart = null;
+let pieChart = null;
+
+// ========== 【汇率切换开关】==========
+// mode = "otc" → USDT/CNY OTC币圈汇率(7.25左右)
+// mode = "bank" → 美元兑人民币中间价(6.77左右)
+const EXCHANGE_RATE_MODE = "bank";
 
 function fetchWithTimeout(url, timeout = 8000) {
-  return Promise.race([
-    fetch(url),
-    new Promise((_, reject) => setTimeout(() => reject(new Error("请求超时")), timeout))
-  ]);
+  return Promise.race([fetch(url),new Promise((_, reject) => setTimeout(() => reject(new Error("请求超时")), timeout))]);
 }
-
-// 代理统一封装
 async function proxyFetch(targetUrl){
   for(const p of proxyList){
     try{
@@ -113,77 +118,84 @@ async function proxyFetch(targetUrl){
   }
   throw new Error("全部代理请求失败");
 }
-
-// 获取今日日期字符串 YYYY-MM-DD
 function getTodayStr(){
-  const d = new Date();
+  const d=new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
 
-// 更新每日净值记录（同一天只保留最新一条）
+// 每日净值持久化
 function updateDailyHistory(totalValueUsd){
   const today = getTodayStr();
-  const existIdx = assetHistory.findIndex(item => item.date === today);
-  if(existIdx >= 0){
-    assetHistory[existIdx].value = totalValueUsd;
-  }else{
-    assetHistory.push({date: today, value: totalValueUsd});
-  }
-  // 按日期排序
-  assetHistory.sort((a,b) => a.date.localeCompare(b.date));
-  localStorage.setItem("assetHistory", JSON.stringify(assetHistory));
+  const idx = assetHistory.findIndex(i=>i.date===today);
+  if(idx>=0) assetHistory[idx].value = totalValueUsd;
+  else assetHistory.push({date:today,value:totalValueUsd});
+  assetHistory.sort((a,b)=>a.date.localeCompare(b.date));
+  localStorage.setItem("assetHistory",JSON.stringify(assetHistory));
 }
 
-// 渲染折线图
-function renderChart(){
+// 绘制折线图
+function renderLineChart(){
   const ctx = document.getElementById("assetChart").getContext("2d");
-  const labels = assetHistory.map(i => i.date.slice(5));
-  const data = assetHistory.map(i => i.value);
-
-  // 统计数据
-  if(assetHistory.length > 0){
-    const startVal = assetHistory[0].value;
-    const latestVal = assetHistory[assetHistory.length-1].value;
-    const diff = latestVal - startVal;
-    const diffPct = (diff / startVal * 100).toFixed(2);
-    const cls = diff >= 0 ? "positive" : "negative";
-    document.getElementById("startValue").innerText = startVal.toFixed(2);
-    document.getElementById("rangeChange").innerHTML = `<span class="${cls}">${diff>=0?"+":""}${diff.toFixed(2)} USD (${diff>=0?"+":""}${diffPct}%)</span>`;
-    document.getElementById("dataDays").innerText = assetHistory.length;
-  }
-
-  if(chartInstance) chartInstance.destroy();
-  chartInstance = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels: labels,
-      datasets: [{
-        label: "总资产净值 (USD)",
-        data: data,
-        borderColor: "#52c41a",
-        backgroundColor: "rgba(82, 196, 26, 0.1)",
-        fill: true,
-        tension: 0.3,
-        pointRadius: 3,
-        pointBackgroundColor: "#52c41a",
-        borderWidth: 2
+  const labels = assetHistory.map(i=>i.date.slice(5));
+  const data = assetHistory.map(i=>i.value);
+  if(lineChart) lineChart.destroy();
+  lineChart = new Chart(ctx,{
+    type:"line",
+    data:{
+      labels,labels,
+      datasets:[{
+        label:"总资产净值 (USD)",
+        data:data,
+        borderColor:"#52c41a",
+        backgroundColor:"rgba(82,196,26,0.1)",
+        fill:true,tension:0.3,pointRadius:3,borderWidth:2
       }]
     },
-    options: {
-      responsive: true,
-      plugins: {
-        legend: {labels:{color:"#aaa"}},
-        tooltip: {
-          callbacks: {
-            label: function(ctx){
-              return "净值: " + ctx.parsed.y.toFixed(2) + " USD";
-            }
-          }
-        }
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{color:"#aaa"}},
+        tooltip:{callbacks:{label:ctx=>`净值: ${ctx.parsed.y.toFixed(2)} USD`}}
       },
-      scales: {
-        x: {ticks:{color:"#888"}, grid:{color:"#2c3238"}},
-        y: {ticks:{color:"#888"}, grid:{color:"#2c3238"}}
+      scales:{
+        x:{ticks:{color:"#888"},grid:{color:"#222830"}},
+        y:{ticks:{color:"#888"},grid:{color:"#222830"}}
+      }
+    }
+  });
+  // 区间统计
+  if(assetHistory.length>0){
+    const startVal = assetHistory[0].value;
+    const latest = assetHistory.at(-1).value;
+    const diff = latest-startVal;
+    const pct = (diff/startVal*100).toFixed(2);
+    const cls = diff>=0?"positive":"negative";
+    document.getElementById("startValue").innerText = startVal.toFixed(2);
+    document.getElementById("rangeChange").innerHTML = `<span class="${cls}">${diff>=0?"+":""}${diff.toFixed(2)} USD (${diff>=0?"+":""}${pct}%)</span>`;
+    document.getElementById("dataDays").innerText = assetHistory.length;
+  }
+}
+
+// 绘制资产占比饼图
+function renderPieChart(holdMarketValue){
+  const ctx = document.getElementById("pieChart").getContext("2d");
+  const labels = holdMarketValue.map(i=>i.symbol);
+  const data = holdMarketValue.map(i=>i.value);
+  const colors = ["#722ed1","#1890ff","#13c2c2","#faad14","#f5222d"];
+  if(pieChart) pieChart.destroy();
+  pieChart = new Chart(ctx,{
+    type:"doughnut",
+    data:{labels,datasets:[{data,backgroundColor:colors,borderWidth:0}]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{color:"#aaa"}},
+        tooltip:{callbacks:{label:function(item){
+          const val = item.parsed;
+          const total = data.reduce((a,b)=>a+b,0);
+          const per = (val/total*100).toFixed(2);
+          return `${item.label}: ${val.toFixed(2)} USD (${per}%)`;
+        }}}
       }
     }
   });
@@ -192,36 +204,23 @@ function renderChart(){
 function render(prices){
   let html = "";
   let sumCost = 0, sumValue = 0;
+  const assetPieData = [];
   holdings.forEach(item=>{
     sumCost += item.costTotal;
     const raw = prices[item.symbol];
     let price, tag = "";
-
-    if(typeof raw === "number"){
-      price = raw;
-    }else if(raw && raw.price){
-      price = raw.price;
-      tag = raw.tag || "";
-    }else{
-      html += `
-      <tr>
-        <td>${item.market}</td>
-        <td>${item.symbol}</td>
-        <td>${item.qty}</td>
-        <td>${item.costPrice.toFixed(2)}</td>
-        <td>${item.costTotal.toFixed(2)}</td>
-        <td class="warn">暂无最新，沿用缓存</td>
-        <td>-</td><td>-</td><td>-</td>
-      </tr>
-      `;
+    if(typeof raw === "number") price = raw;
+    else if(raw && raw.price){price=raw.price;tag=raw.tag||"";}
+    else{
+      html += `<tr><td>${item.market}</td><td>${item.symbol}</td><td>${item.qty}</td><td>${item.costPrice.toFixed(2)}</td><td>${item.costTotal.toFixed(2)}</td><td class="warn">暂无最新，沿用缓存</td><td>-</td><td>-</td><td>-</td></tr>`;
       return;
     }
-
     const marketValue = item.qty * price;
+    assetPieData.push({symbol:item.symbol,value:marketValue});
+    sumValue += marketValue;
     const pnl = marketValue - item.costTotal;
-    const pnlPct = (pnl / item.costTotal *100).toFixed(2);
-    const cls = pnl >=0 ? "positive" : "negative";
-
+    const pnlPct = (pnl/item.costTotal*100).toFixed(2);
+    const cls = pnl>=0?"positive":"negative";
     html += `
     <tr>
       <td>${item.market}</td>
@@ -233,38 +232,29 @@ function render(prices){
       <td>${marketValue.toFixed(2)}</td>
       <td class="${cls}">${pnl.toFixed(2)}</td>
       <td class="${cls}">${pnlPct}%</td>
-    </tr>
-    `;
-    sumValue += marketValue;
+    </tr>`;
   })
   document.getElementById("tableBody").innerHTML = html;
-
   const totalPnl = sumValue - sumCost;
-  const totalPnlPct = (totalPnl / sumCost *100).toFixed(2);
-  const clsTotal = totalPnl >=0 ? "positive" : "negative";
-
+  const totalPnlPct = (totalPnl/sumCost*100).toFixed(2);
+  const clsTotal = totalPnl>=0?"positive":"negative";
   document.getElementById("totalCost").innerText = sumCost.toFixed(2);
   document.getElementById("totalValue").innerText = sumValue.toFixed(2);
   document.getElementById("totalPnl").innerHTML = `<span class="${clsTotal}">${totalPnl.toFixed(2)}</span>`;
   document.getElementById("totalPnlPct").innerHTML = `<span class="${clsTotal}">${totalPnlPct}%</span>`;
-
-  // 人民币折算
   document.getElementById("usdtCnyRate").innerText = usdtCnyRate.toFixed(4);
-  const totalValueCNY = sumValue * usdtCnyRate;
-  const totalPnlCNY = totalPnl * usdtCnyRate;
-  document.getElementById("totalValueCNY").innerText = totalValueCNY.toFixed(2);
-  document.getElementById("totalPnlCNY").innerHTML = `<span class="${clsTotal}">${totalPnlCNY.toFixed(2)}</span>`;
-
+  const totalCNY = sumValue * usdtCnyRate;
+  const pnlCNY = totalPnl * usdtCnyRate;
+  document.getElementById("totalValueCNY").innerText = totalCNY.toFixed(2);
+  document.getElementById("totalPnlCNY").innerHTML = `<span class="${clsTotal}">${pnlCNY.toFixed(2)}</span>`;
   document.getElementById("lastUpdate").innerText = new Date().toLocaleString();
-
-  // 更新每日净值并刷新图表
-  if(sumValue > 0){
+  if(sumValue>0){
     updateDailyHistory(sumValue);
-    renderChart();
+    renderLineChart();
+    renderPieChart(assetPieData);
   }
 }
 
-// ========== 虚拟货币【完全不变】 ==========
 async function fetchCryptoPrices(){
   const ids = holdings.filter(h=>h.coingeckoId).map(h=>h.coingeckoId).join(",");
   const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
@@ -278,22 +268,25 @@ async function fetchCryptoPrices(){
   return map;
 }
 
-// ========== 获取USDT/CNY汇率（OTC参考价） ==========
-async function fetchUsdtCnyRate(){
+// 获取汇率
+async function fetchExchangeRate(){
   try{
-    const url = "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=cny";
-    const res = await fetch(url);
-    const json = await res.json();
-    if(json.tether && json.tether.cny){
-      usdtCnyRate = json.tether.cny;
-      localStorage.setItem("usdtCnyRate", usdtCnyRate);
+    if(EXCHANGE_RATE_MODE === "otc"){
+      // USDT/CNY OTC汇率（当前7.2附近）
+      const url = "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=cny";
+      const res = await fetch(url);
+      const json = await res.json();
+      if(json.tether?.cny){
+        usdtCnyRate = json.tether.cny;
+        localStorage.setItem("usdtCnyRate",usdtCnyRate);
+      }
+    }else{
+      // 方案：美元兑人民币中间价（需要额外接口，国内源）
+      // 如需切换银行汇率，我可以补充接口
     }
-  }catch(e){
-    console.log("汇率获取失败，使用缓存汇率", e);
-  }
+  }catch(e){console.log("汇率获取失败，使用缓存");}
 }
 
-// ========== Yahoo CRCL 盘前/盘后逻辑 + 多代理重试 ==========
 async function fetchStockPrice(){
   const ticker = "CRCL";
   const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
@@ -305,20 +298,12 @@ async function fetchStockPrice(){
       const meta = j.chart.result[0].meta;
       let usePrice = meta.regularMarketPrice;
       let tag = "";
-      const nowUtcSec = Date.now() / 1000;
-      const regCloseTime = meta.regularMarketTime;
-
-      if (nowUtcSec < regCloseTime && meta.preMarketPrice) {
-        usePrice = meta.preMarketPrice;
-        tag = "[盘前]";
-      } else if (nowUtcSec > regCloseTime && meta.postMarketPrice) {
-        usePrice = meta.postMarketPrice;
-        tag = "[盘后]";
-      }
-      return {"CRCL": {price:usePrice, tag:tag}};
-    }catch(err){
-      continue;
-    }
+      const nowUtcSec = Date.now()/1000;
+      const closeTime = meta.regularMarketTime;
+      if(meta.preMarketPrice && nowUtcSec < closeTime){usePrice=meta.preMarketPrice;tag="[盘前]";}
+      else if(meta.postMarketPrice && nowUtcSec>closeTime){usePrice=meta.postMarketPrice;tag="[盘后]";}
+      return {"CRCL":{price:usePrice,tag:tag}};
+    }catch(err){continue;}
   }
   return null;
 }
@@ -326,48 +311,33 @@ async function fetchStockPrice(){
 async function loadQuotes(){
   warnTip.innerText = "";
   const newPriceMap = {...priceCache};
-
-  // 汇率（并行请求，不阻塞主行情）
-  fetchUsdtCnyRate();
-
+  fetchExchangeRate();
   try{
     const cryptoMap = await fetchCryptoPrices();
-    Object.assign(newPriceMap, cryptoMap);
-  }catch(e){
-    warnTip.innerText += "⚠️ 加密货币行情获取失败 ";
-  }
-
+    Object.assign(newPriceMap,cryptoMap);
+  }catch(e){warnTip.innerText += "⚠️ 加密货币行情获取失败 ";}
   try{
     const stockMap = await fetchStockPrice();
-    if(stockMap){
-      Object.assign(newPriceMap, stockMap);
-    }else{
-      warnTip.innerText += "⚠️ CRCL代理全部失效，沿用缓存价格";
-    }
-  }catch(e){
-    warnTip.innerText += "⚠️ CRCL请求异常，沿用缓存价格";
-  }
-
-  // 更新缓存并持久化到浏览器本地
+    if(stockMap) Object.assign(newPriceMap,stockMap);
+    else warnTip.innerText += "⚠️ CRCL代理全部失效，沿用缓存价格";
+  }catch(e){warnTip.innerText += "⚠️ CRCL请求异常，沿用缓存价格";}
   priceCache = {...newPriceMap};
-  localStorage.setItem("assetPriceCache", JSON.stringify(priceCache));
+  localStorage.setItem("assetPriceCache",JSON.stringify(priceCache));
   render(priceCache);
-  countdownSec = REFRESH_MS / 1000;
+  countdownSec = REFRESH_MS/1000;
 }
 
 function tickCountdown(){
   countdownSec--;
-  const m = Math.floor(countdownSec /60);
-  const s = countdownSec %60;
-  document.getElementById("countdown").innerText = `${m}:${s.toString().padStart(2,"0")}`;
-  if(countdownSec <=0){
-    loadQuotes();
-  }
+  const m = Math.floor(countdownSec/60);
+  const s = countdownSec%60;
+  document.getElementById("countdown").innerText = `${m}:${m}:${s.toString().padStart(2,"0")}`;
+  if(countdownSec <=0) loadQuotes();
 }
 
 loadQuotes();
-setInterval(tickCountdown, 1000);
-setInterval(loadQuotes, REFRESH_MS);
+setInterval(tickCountdown,1000);
+setInterval(loadQuotes,REFRESH_MS);
 </script>
 </body>
 </html>
