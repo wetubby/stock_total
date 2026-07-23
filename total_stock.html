@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>资产持仓监控面板</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 *{box-sizing:border-box;font-family:system-ui, sans-serif;}
 body{max-width:1100px;margin:30px auto;padding:0 16px;background:#0f1419;color:#e6e6e6;}
@@ -15,7 +16,12 @@ th{color:#aaa;font-weight:normal;}
 .warn{color:#faad14;}
 .tag-ext{font-size:12px;margin-left:6px;color:#999;}
 .total-box{background:#1a2028;padding:18px;border-radius:8px;margin:20px 0;}
+.chart-box{background:#1a2028;padding:18px;border-radius:8px;margin:20px 0;}
+.chart-box h3{margin-top:0;}
+.chart-summary{display:flex;gap:30px;margin-bottom:14px;color:#aaa;font-size:14px;}
+.chart-summary b{color:#e6e6e6;font-weight:normal;font-size:16px;margin-left:6px;}
 .info{color:#999;font-size:14px}
+.cny-line{margin-top:8px;padding-top:8px;border-top:1px solid #2c3238;}
 </style>
 </head>
 <body>
@@ -47,6 +53,20 @@ th{color:#aaa;font-weight:normal;}
 <p>总投入成本：<span id="totalCost"></span> USD</p>
 <p>当前总市值：<span id="totalValue"></span> USD</p>
 <p>总盈亏：<span id="totalPnl"></span> USD（<span id="totalPnlPct"></span>）</p>
+<div class="cny-line">
+<p>折合人民币总市值：<span id="totalValueCNY"></span> CNY（汇率：<span id="usdtCnyRate">-</span>）</p>
+<p>折合人民币总盈亏：<span id="totalPnlCNY"></span> CNY</p>
+</div>
+</div>
+
+<div class="chart-box">
+<h3>资产净值走势（按日）</h3>
+<div class="chart-summary">
+  <div>起始日（2026-07-01）净值：<b id="startValue">-</b> USD</div>
+  <div>累计净值变动：<b id="rangeChange">-</b></div>
+  <div>数据天数：<b id="dataDays">-</b> 天</div>
+</div>
+<canvas id="assetChart" height="120"></canvas>
 </div>
 
 <script>
@@ -69,12 +89,104 @@ const proxyList = [
 ];
 // 从本地存储读取历史行情，刷新页面不丢失
 let priceCache = JSON.parse(localStorage.getItem("assetPriceCache")) || {};
+// 历史净值数据（按天）
+let assetHistory = JSON.parse(localStorage.getItem("assetHistory")) || [];
+// USDT兑人民币汇率（OTC参考价）
+let usdtCnyRate = parseFloat(localStorage.getItem("usdtCnyRate")) || 7.25;
+let chartInstance = null;
 
 function fetchWithTimeout(url, timeout = 8000) {
   return Promise.race([
     fetch(url),
     new Promise((_, reject) => setTimeout(() => reject(new Error("请求超时")), timeout))
   ]);
+}
+
+// 代理统一封装
+async function proxyFetch(targetUrl){
+  for(const p of proxyList){
+    try{
+      const url = p + encodeURIComponent(targetUrl);
+      const res = await fetchWithTimeout(url);
+      if(res.ok) return res;
+    }catch(e){continue;}
+  }
+  throw new Error("全部代理请求失败");
+}
+
+// 获取今日日期字符串 YYYY-MM-DD
+function getTodayStr(){
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+// 更新每日净值记录（同一天只保留最新一条）
+function updateDailyHistory(totalValueUsd){
+  const today = getTodayStr();
+  const existIdx = assetHistory.findIndex(item => item.date === today);
+  if(existIdx >= 0){
+    assetHistory[existIdx].value = totalValueUsd;
+  }else{
+    assetHistory.push({date: today, value: totalValueUsd});
+  }
+  // 按日期排序
+  assetHistory.sort((a,b) => a.date.localeCompare(b.date));
+  localStorage.setItem("assetHistory", JSON.stringify(assetHistory));
+}
+
+// 渲染折线图
+function renderChart(){
+  const ctx = document.getElementById("assetChart").getContext("2d");
+  const labels = assetHistory.map(i => i.date.slice(5));
+  const data = assetHistory.map(i => i.value);
+
+  // 统计数据
+  if(assetHistory.length > 0){
+    const startVal = assetHistory[0].value;
+    const latestVal = assetHistory[assetHistory.length-1].value;
+    const diff = latestVal - startVal;
+    const diffPct = (diff / startVal * 100).toFixed(2);
+    const cls = diff >= 0 ? "positive" : "negative";
+    document.getElementById("startValue").innerText = startVal.toFixed(2);
+    document.getElementById("rangeChange").innerHTML = `<span class="${cls}">${diff>=0?"+":""}${diff.toFixed(2)} USD (${diff>=0?"+":""}${diffPct}%)</span>`;
+    document.getElementById("dataDays").innerText = assetHistory.length;
+  }
+
+  if(chartInstance) chartInstance.destroy();
+  chartInstance = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: labels,
+      datasets: [{
+        label: "总资产净值 (USD)",
+        data: data,
+        borderColor: "#52c41a",
+        backgroundColor: "rgba(82, 196, 26, 0.1)",
+        fill: true,
+        tension: 0.3,
+        pointRadius: 3,
+        pointBackgroundColor: "#52c41a",
+        borderWidth: 2
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: {labels:{color:"#aaa"}},
+        tooltip: {
+          callbacks: {
+            label: function(ctx){
+              return "净值: " + ctx.parsed.y.toFixed(2) + " USD";
+            }
+          }
+        }
+      },
+      scales: {
+        x: {ticks:{color:"#888"}, grid:{color:"#2c3238"}},
+        y: {ticks:{color:"#888"}, grid:{color:"#2c3238"}}
+      }
+    }
+  });
 }
 
 function render(prices){
@@ -135,7 +247,21 @@ function render(prices){
   document.getElementById("totalValue").innerText = sumValue.toFixed(2);
   document.getElementById("totalPnl").innerHTML = `<span class="${clsTotal}">${totalPnl.toFixed(2)}</span>`;
   document.getElementById("totalPnlPct").innerHTML = `<span class="${clsTotal}">${totalPnlPct}%</span>`;
+
+  // 人民币折算
+  document.getElementById("usdtCnyRate").innerText = usdtCnyRate.toFixed(4);
+  const totalValueCNY = sumValue * usdtCnyRate;
+  const totalPnlCNY = totalPnl * usdtCnyRate;
+  document.getElementById("totalValueCNY").innerText = totalValueCNY.toFixed(2);
+  document.getElementById("totalPnlCNY").innerHTML = `<span class="${clsTotal}">${totalPnlCNY.toFixed(2)}</span>`;
+
   document.getElementById("lastUpdate").innerText = new Date().toLocaleString();
+
+  // 更新每日净值并刷新图表
+  if(sumValue > 0){
+    updateDailyHistory(sumValue);
+    renderChart();
+  }
 }
 
 // ========== 虚拟货币【完全不变】 ==========
@@ -150,6 +276,21 @@ async function fetchCryptoPrices(){
   map["AAVE"] = json.aave.usd;
   map["UNI"] = json.uniswap.usd;
   return map;
+}
+
+// ========== 获取USDT/CNY汇率（OTC参考价） ==========
+async function fetchUsdtCnyRate(){
+  try{
+    const url = "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=cny";
+    const res = await fetch(url);
+    const json = await res.json();
+    if(json.tether && json.tether.cny){
+      usdtCnyRate = json.tether.cny;
+      localStorage.setItem("usdtCnyRate", usdtCnyRate);
+    }
+  }catch(e){
+    console.log("汇率获取失败，使用缓存汇率", e);
+  }
 }
 
 // ========== Yahoo CRCL 盘前/盘后逻辑 + 多代理重试 ==========
@@ -185,6 +326,9 @@ async function fetchStockPrice(){
 async function loadQuotes(){
   warnTip.innerText = "";
   const newPriceMap = {...priceCache};
+
+  // 汇率（并行请求，不阻塞主行情）
+  fetchUsdtCnyRate();
 
   try{
     const cryptoMap = await fetchCryptoPrices();
