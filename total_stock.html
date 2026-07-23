@@ -62,7 +62,16 @@ const holdings = [
 const REFRESH_MS = 5 * 60 * 1000;
 let countdownSec = REFRESH_MS / 1000;
 const warnTip = document.getElementById("warnTip");
-const CORS_PROXY = "https://corsproxy.io/?";
+// 更换备用worker代理
+const CORS_PROXY = "https://cors-anywhere.azm.workers.dev/";
+
+// 请求超时封装
+function fetchWithTimeout(url, timeout = 8000) {
+  return Promise.race([
+    fetch(url),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("请求超时")), timeout))
+  ]);
+}
 
 // 渲染表格
 function render(prices){
@@ -116,16 +125,16 @@ function render(prices){
   document.getElementById("totalCost").innerText = sumCost.toFixed(2);
   document.getElementById("totalValue").innerText = sumValue.toFixed(2);
   document.getElementById("totalPnl").innerHTML = `<span class="${clsTotal}">${totalPnl.toFixed(2)}</span>`;
-  document.getElementById("totalPnlPct").innerHTML = `<span class="${clsTotal}">${totalPnlPct}%</span>`;
+  document.getElementById("totalPnlPct").innerHTML = `<span class="${clsTotal}">${totalPnlPct}</span>%`;
   document.getElementById("lastUpdate").innerText = new Date().toLocaleString();
 }
 
-// CoinGecko 获取加密货币（走代理）
+// CoinGecko 获取加密货币
 async function fetchCryptoPrices(){
   const ids = holdings.filter(h=>h.coingeckoId).map(h=>h.coingeckoId).join(",");
   const targetUrl = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
-  const url = CORS_PROXY + encodeURIComponent(targetUrl);
-  const res = await fetch(url);
+  const url = CORS_PROXY + targetUrl;
+  const res = await fetchWithTimeout(url);
   const json = await res.json();
   const map = {};
   map["BTC"] = {price: json.bitcoin.usd, tag:""};
@@ -135,12 +144,12 @@ async function fetchCryptoPrices(){
   return map;
 }
 
-// 美股CRCL 支持盘前/盘后价格
+// 美股CRCL：支持盘前/盘中/盘后
 async function fetchStockPrice(){
   const ticker = "CRCL";
   const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
-  const url = CORS_PROXY + encodeURIComponent(targetUrl);
-  const res = await fetch(url);
+  const url = CORS_PROXY + targetUrl;
+  const res = await fetchWithTimeout(url);
   const j = await res.json();
   const meta = j.chart.result[0].meta;
 
@@ -148,7 +157,6 @@ async function fetchStockPrice(){
   let tag = "";
   const nowTs = Date.now() / 1000;
 
-  // 判断当前处于盘前/盘后
   const preTs = meta.preMarketTime;
   const regTs = meta.regularMarketTime;
   const postTs = meta.postMarketTime;
